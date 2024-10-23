@@ -66,8 +66,8 @@ void setup()
   /*TFT_eSPI can be enabled lv_conf.h to initialize the display in a simple way*/
   disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, draw_buf, sizeof(draw_buf));
   //.pio\libdeps\m5stack-stamps3\lvgl\src\drivers\display\tft_espi\lv_tft_espi.cpp
-  // change rotation to 4
-  // dsc->tft->setRotation(4);   /* Landscape orientation, flipped */
+  // change rotation to 1
+  // dsc->tft->setRotation(1);   /* Landscape orientation, flipped */
   tft.invertDisplay(true); // Where i is true or false
   tft.fillScreen(TFT_BLACK);
   lv_display_set_rotation(disp, TFT_ROTATION);
@@ -81,11 +81,13 @@ void setup()
   lv_obj_t *label = lv_label_create(lv_screen_active());
   lv_label_set_text(label, "Hello Arduino, I'm LVGL!");
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
   delay(1000);
   // example 3
   lv_obj_t *cont = lv_obj_create(lv_screen_active());
-  lv_obj_set_size(cont, 480, 320);
-  lv_obj_center(cont);
+  lv_obj_set_size(cont, 160, 240);
+  // lv_obj_center(cont);
+  lv_obj_align(cont,  LV_ALIGN_LEFT_MID, 0, 0);
   lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW_WRAP);
 
   uint32_t i;
