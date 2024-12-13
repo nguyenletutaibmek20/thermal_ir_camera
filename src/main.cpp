@@ -1,113 +1,100 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <TFT_eSPI.h>
-#include <lvgl.h>
-#include "TAMC_GT911.h"
-/*Set to your screen resolution and rotation*/
+#include <Adafruit_MLX90640.h>
+
+/* Set to your screen resolution */
 #define TFT_HOR_RES 320
 #define TFT_VER_RES 480
-#define TFT_ROTATION LV_DISPLAY_ROTATION_90
+#define DATA_WIDTH 32
+#define DATA_HEIGHT 24
 
-/*LVGL draw into this buffer, 1/10 screen size usually works well. The size is in bytes*/
-#define DRAW_BUF_SIZE (TFT_HOR_RES * TFT_VER_RES / 10 * (LV_COLOR_DEPTH / 8))
-uint32_t draw_buf[DRAW_BUF_SIZE / 4];
+/* MLX90640 Configuration */
+Adafruit_MLX90640 mlx;
+float frame[DATA_WIDTH * DATA_HEIGHT];
 
-TFT_eSPI tft = TFT_eSPI(); // Invoke custom library
+/* TFT Configuration */
+TFT_eSPI tft = TFT_eSPI(); // Initialize TFT display
 
-TAMC_GT911 tp = TAMC_GT911(TOUCH_SDA, TOUCH_SCL, TOUCH_INT, TOUCH_RST, TFT_WIDTH, TFT_HEIGHT);
-/*Read the touchpad*/
-void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
-{
-  tp.read();
-  if (tp.isTouched)
-  {
-    for (int i = 0; i < tp.touches; i++)
-    {
-      data->state = LV_INDEV_STATE_PRESSED;
-      data->point.x = tp.points[i].x;
-      data->point.y = tp.points[i].y;
+/* Function to convert temperature to RGB565 color */
+uint16_t mapToRainbow(float value, float minTemp, float maxTemp) {
+    // Clamp the value within the min and max temperature
+    if (value < minTemp) value = minTemp;
+    if (value > maxTemp) value = maxTemp;
+
+    // Map the temperature value to the hue (0 - 120 degrees, green to red)
+    float hue = (value - minTemp) * 120.0 / (maxTemp - minTemp);
+
+    // Convert hue to RGB (HSV to RGB conversion)
+    float r, g, b;
+    if (hue <= 60) {
+        r = 1.0;
+        g = hue / 60.0;
+        b = 0.0;
+    } else {
+        r = 1.0 - ((hue - 60.0) / 60.0);
+        g = 1.0;
+        b = 0.0;
     }
-  }
-  else
-  {
-    data->state = LV_INDEV_STATE_RELEASED;
-  }
-}
-/*use Arduinos millis() as tick source*/
-static uint32_t my_tick(void)
-{
-  return millis();
-}
-static void event_cb2(lv_event_t * e)
-{
-    /*The original target of the event. Can be the buttons or the container*/
-    lv_obj_t * target = (lv_obj_t*)lv_event_get_target(e);
 
-    /*The current target is always the container as the event is added to it*/
-    lv_obj_t * cont = (lv_obj_t*)lv_event_get_current_target(e);
-
-    /*If container was clicked do nothing*/
-    if(target == cont) return;
-
-    /*Make the clicked buttons red*/
-    lv_obj_set_style_bg_color(target, lv_palette_main(LV_PALETTE_RED), 0);
-}
-void setup()
-{
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH); // Set the Back-light on
-  String LVGL_Arduino = "Hello Arduino! ";
-  LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
-  Serial.begin(115200);
-  Serial.println(LVGL_Arduino);
-  lv_init();
-  lv_tick_set_cb(my_tick);
-  lv_display_t *disp;
-  /*TFT_eSPI can be enabled lv_conf.h to initialize the display in a simple way*/
-  disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, draw_buf, sizeof(draw_buf));
-  //.pio\libdeps\m5stack-stamps3\lvgl\src\drivers\display\tft_espi\lv_tft_espi.cpp
-  // change rotation to 1
-  // dsc->tft->setRotation(1);   /* Landscape orientation, flipped */
-  tft.invertDisplay(true); // Where i is true or false
-  tft.fillScreen(TFT_BLACK);
-  lv_display_set_rotation(disp, TFT_ROTATION);
-
-  tp.begin();
-  tp.setRotation(ROTATION_INVERTED); // Change this to match your screen's orientation
-
-  /*Initialize the (dummy) input device driver*/
-  lv_indev_t *indev = lv_indev_create();
-  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER); /*Touchpad should have POINTER type*/
-  lv_indev_set_read_cb(indev, my_touchpad_read);
-  lv_obj_t *label = lv_label_create(lv_screen_active());
-  lv_label_set_text(label, "Hello Arduino, I'm LVGL!");
-  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-  delay(1000);
-  // example 3
-  lv_obj_t *cont = lv_obj_create(lv_screen_active());
-  lv_obj_set_size(cont, 160, 240);
-  // lv_obj_center(cont);
-  lv_obj_align(cont,  LV_ALIGN_LEFT_MID, 0, 0);
-  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW_WRAP);
-
-  uint32_t i;
-  for (i = 0; i < 30; i++)
-  {
-    lv_obj_t *btn = lv_button_create(cont);
-    lv_obj_set_size(btn, 70, 50);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text_fmt(label, "%" LV_PRIu32, i);
-    lv_obj_center(label);
-  }
-
-  lv_obj_add_event_cb(cont, event_cb2, LV_EVENT_CLICKED, NULL);
+    // Scale RGB to 8-bit and convert to 16-bit color
+    uint8_t red = r * 255;
+    uint8_t green = g * 255;
+    uint8_t blue = b * 255;
+    return tft.color565(red, green, blue);
 }
 
-void loop()
-{
-  lv_task_handler();
-  delay(5);
+/* Function to display the heatmap on the TFT */
+void displayHeatmap(float *frame, float minTemp, float maxTemp) {
+    for (int y = 0; y < DATA_HEIGHT; y++) {
+        for (int x = 0; x < DATA_WIDTH; x++) {
+            float value = frame[y * DATA_WIDTH + x];
+            uint16_t color = mapToRainbow(value, minTemp, maxTemp);
+            tft.fillRect(x * (TFT_HOR_RES / DATA_WIDTH), y * (TFT_VER_RES / DATA_HEIGHT),
+                         (TFT_HOR_RES / DATA_WIDTH), (TFT_VER_RES / DATA_HEIGHT), color);
+        }
+    }
+}
+
+void setup() {
+    // Initialize I2C communication for MLX90640
+    Wire.begin(21, 22);
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH); // Set the backlight on
+
+    Serial.begin(115200);
+    Serial.println("Starting...");
+
+    // Initialize TFT display
+    tft.begin();
+    tft.setRotation(3);
+    tft.fillScreen(TFT_BLACK);
+
+    // Initialize MLX90640
+    if (!mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire)) {
+        Serial.println("MLX90640 initialization failed!");
+        while (1)
+            delay(10);
+    }
+    mlx.setMode(MLX90640_CHESS);
+    mlx.setResolution(MLX90640_ADC_18BIT);
+    mlx.setRefreshRate(MLX90640_4_HZ);
+
+    Serial.println("Setup complete");
+}
+
+void loop() {
+    if (mlx.getFrame(frame) == 0) {
+        Serial.println("Got frame");
+
+        // Define temperature range
+        float minTemp = 20.0; // Minimum temperature
+        float maxTemp = 40.0; // Maximum temperature
+
+        // Display heatmap with rainbow gradient
+        displayHeatmap(frame, minTemp, maxTemp);
+    }
+
+    delay(100); // Adjust refresh rate
 }
