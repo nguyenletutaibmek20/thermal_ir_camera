@@ -73,7 +73,8 @@ void setup()
   lv_display_set_rotation(disp, TFT_ROTATION);
 
   tp.begin();
-  tp.setRotation(ROTATION_NORMAL);
+  tp.setRotation(ROTATION_INVERTED); // Change this to match your screen's orientation
+
   /*Initialize the (dummy) input device driver*/
   lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER); /*Touchpad should have POINTER type*/
