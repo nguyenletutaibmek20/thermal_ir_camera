@@ -9,7 +9,7 @@
 #define TFT_VER_RES 320
 #define DATA_WIDTH 32
 #define DATA_HEIGHT 24
-#define GAP_WIDTH 63  // 2 cm gap in pixels
+#define GAP_WIDTH 0  // Distance between heatmap and temperature scale
 #define HEATMAP_WIDTH (TFT_HOR_RES - GAP_WIDTH - 40) // Leave space for scale
 #define HEATMAP_HEIGHT TFT_VER_RES
 #define BOX_WIDTH (HEATMAP_WIDTH / DATA_WIDTH)
@@ -55,31 +55,31 @@ void renderHeatmap(float *frame) {
 
 // Display color scale on the right side
 void drawTemperatureScale() {
-    int scaleHeight = TFT_VER_RES - 50; // Fit within the vertical resolution
+    int scaleHeight = TFT_VER_RES; // Fit within the vertical resolution
     int scaleWidth = 20;               // Width of the scale
-    int scaleX = HEATMAP_WIDTH + GAP_WIDTH; // Start after heatmap and gap
-    int scaleY = 25;
+    int scaleX = TFT_HOR_RES - scaleWidth; // Start after heatmap and gap
+    int scaleY = 0;
 
     // Draw a background rectangle for better visibility
-    tft.fillRect(scaleX - 10, scaleY - 5, scaleWidth + 20, scaleHeight + 10, TFT_BLACK);
+    tft.fillRect(scaleX - 10, scaleY, scaleWidth + 10, scaleHeight, TFT_BLACK);
 
     for (int i = 0; i < scaleHeight; i++) {
         float temp = MINTEMP + (MAXTEMP - MINTEMP) * ((float)i / scaleHeight);
         uint16_t color = mapToInfernoColor(temp, MINTEMP, MAXTEMP);
-        tft.drawFastHLine(scaleX, scaleY + scaleHeight - i, scaleWidth, color);
+        tft.drawFastHLine(scaleX, scaleY + i, scaleWidth, color);
     }
 
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(1);
 
     // Display temperature labels with spacing for clarity
-    tft.setCursor(scaleX + scaleWidth + 5, scaleY - 5);
+    tft.setCursor(scaleX + scaleWidth + 5, scaleY + 5);
     tft.printf("%.1fC", MAXTEMP);
     tft.setCursor(scaleX + scaleWidth + 5, scaleY + scaleHeight - 10);
     tft.printf("%.1fC", MINTEMP);
 }
 
-// Initialize MLX90640 sensor
+// Initialize MLX90640 sensor 
 bool initializeSensor() {
     if (!mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire)) {
         Serial.println("MLX90640 not found!");
@@ -95,6 +95,7 @@ bool initializeSensor() {
 }
 
 void setup() {
+
     // Initialize I2C communication for MLX90640
     Wire.begin(21, 22);
     pinMode(TFT_BL, OUTPUT);
@@ -106,7 +107,7 @@ void setup() {
 
     // Initialize TFT display
     tft.begin();
-    tft.setRotation(1);
+    tft.setRotation(3);
     tft.fillScreen(TFT_BLACK);
 
     // Draw the temperature scale
@@ -116,6 +117,10 @@ void setup() {
     if (!initializeSensor()) {
         while (1) delay(10); // Stop here if initialization fails
     }
+
+    // Configure pin 23 as an output and activate it
+    pinMode(13, OUTPUT);
+    digitalWrite(13,LOW); // Activate pin 23
 
     Serial.println("Setup complete");
 }
