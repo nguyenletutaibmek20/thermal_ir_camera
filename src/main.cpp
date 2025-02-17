@@ -1,147 +1,255 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <Wire.h>
 #include <TFT_eSPI.h>
+#include <lvgl.h>
+#include "TAMC_GT911.h"
+#include <Wire.h>
 #include <Adafruit_MLX90640.h>
+#define MLX90640_DEBUG
+/* Set to your screen resolution and rotation */
+#define TFT_HOR_RES 320
+#define TFT_VER_RES 480
+#define TFT_ROTATION LV_DISPLAY_ROTATION_270
 
-/* TFT and Heatmap configurations */
-#define TFT_HOR_RES 480
-#define TFT_VER_RES 320
-#define DATA_WIDTH 32
-#define DATA_HEIGHT 24
-#define GAP_WIDTH 0  // Distance between heatmap and temperature scale
-#define HEATMAP_WIDTH (TFT_HOR_RES - GAP_WIDTH - 40) // Leave space for scale
-#define HEATMAP_HEIGHT TFT_VER_RES
-#define BOX_WIDTH (HEATMAP_WIDTH / DATA_WIDTH)
-#define BOX_HEIGHT (HEATMAP_HEIGHT / DATA_HEIGHT)
+/* LVGL draw into this buffer, 1/10 screen size usually works well. The size is in bytes */
+#define DRAW_BUF_SIZE (TFT_HOR_RES * TFT_VER_RES / 10 * (LV_COLOR_DEPTH / 8))
+uint16_t draw_buf[DRAW_BUF_SIZE / 10];
 
-// Define temperature range for heatmap
-#define MINTEMP 0.0
-#define MAXTEMP 60.0
-
-/* MLX90640 Configuration */
+TFT_eSPI tft = TFT_eSPI(); // TFT Display
+TAMC_GT911 tp = TAMC_GT911(TOUCH_SDA, TOUCH_SCL, TOUCH_INT, TOUCH_RST, TFT_WIDTH, TFT_HEIGHT);
 Adafruit_MLX90640 mlx;
-float frame[DATA_WIDTH * DATA_HEIGHT];
+float mlx90640Frame[32 * 24];
 
-/* TFT Configuration */
-TFT_eSPI tft = TFT_eSPI(); // Initialize TFT display
-
-// Heatmap color palette (using an inferno-like gradient)
-const uint16_t infernoColors[] = {
-    0x0000, 0x0401, 0x0803, 0x1007, 0x1810, 0x2020, 0x2830, 0x3040,
-    0x3850, 0x4060, 0x4870, 0x5090, 0x58A0, 0x60B0, 0x70C0, 0x80D0,
-    0x90E0, 0xA0F0, 0xB0FF, 0xC0DF, 0xD0BF, 0xE09F, 0xF07F, 0xFF5F
+uint8_t mlxCamMap[768 * 2];
+lv_image_dsc_t mlxImage = {
+    .header{
+        .magic = LV_IMAGE_HEADER_MAGIC,
+        .cf = LV_COLOR_FORMAT_RGB565,
+        .w = 32,
+        .h = 24,
+    },
+    .data_size = 768 * 2,
+    .data = mlxCamMap,
 };
+lv_obj_t *img2;
 
-// Helper function to map temperature to color
-uint16_t mapToInfernoColor(float temp, float minTemp, float maxTemp) {
-    if (temp < minTemp) temp = minTemp;
-    if (temp > maxTemp) temp = maxTemp;
-
-    int index = (int)((temp - minTemp) * (sizeof(infernoColors) / sizeof(infernoColors[0]) - 1) / (maxTemp - minTemp));
-    return infernoColors[index];
+/* Read the touchpad */
+void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+  tp.read();
+  if (tp.isTouched)
+  {
+    for (int i = 0; i < tp.touches; i++)
+    {
+      data->state = LV_INDEV_STATE_PRESSED;
+      data->point.x = tp.points[i].x;
+      data->point.y = tp.points[i].y;
+    }
+  }
+  else
+  {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
 }
 
-// Function to render the heatmap on the display
-void renderHeatmap(float *frame) {
-    for (int y = 0; y < DATA_HEIGHT; y++) {
-        for (int x = 0; x < DATA_WIDTH; x++) {
-            float temp = frame[y * DATA_WIDTH + x];
-            uint16_t color = mapToInfernoColor(temp, MINTEMP, MAXTEMP);
-            tft.fillRect(x * BOX_WIDTH, y * BOX_HEIGHT, BOX_WIDTH, BOX_HEIGHT, color);
+/* Use Arduino millis() as tick source */
+static uint32_t my_tick(void)
+{
+  return millis();
+}
+
+/* Touch event callback */
+static void event_cb2(lv_event_t *e)
+{
+  lv_obj_t *target = (lv_obj_t *)lv_event_get_target(e);
+  lv_obj_t *cont = (lv_obj_t *)lv_event_get_current_target(e);
+  if (target == cont)
+    return;
+  lv_obj_set_style_bg_color(target, lv_palette_main(LV_PALETTE_RED), 0);
+}
+// initailize lvgl objects
+lv_obj_t *circle;
+lv_obj_t *label4;
+lv_obj_t *btn;
+lv_obj_t *btn2;
+lv_obj_t *btn3;
+lv_obj_t *label;
+lv_obj_t *label2;
+lv_obj_t *label3;
+
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println("Initializing...");
+  Wire.begin();
+  Wire.setClock(400000);
+  // Initialize the MLX90640 sensor
+  Serial.println("Initializing MLX90640...");
+  if (!mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire))
+  {
+    Serial.println("MLX90640 not found. Check wiring!");
+  }
+  mlx.setMode(MLX90640_CHESS);
+  mlx.setResolution(MLX90640_ADC_16BIT);
+  mlx.setRefreshRate(MLX90640_8_HZ);
+
+  // Initialize the display
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  lv_init();
+  lv_tick_set_cb(my_tick);
+  lv_display_t *disp;
+  disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, draw_buf, sizeof(draw_buf));
+  tft.invertDisplay(true);
+  tft.fillScreen(TFT_BLACK);
+  lv_display_set_rotation(disp, TFT_ROTATION);
+  tp.begin();
+  tp.setRotation(ROTATION_NORMAL);
+
+  lv_indev_t *indev = lv_indev_create();
+  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(indev, my_touchpad_read);
+
+  // Create a screen and load the image
+  img2 = lv_img_create(lv_screen_active());
+  lv_img_set_src(img2, &mlxImage);
+  lv_image_set_scale(img2, 2560); // Zoom in 10x
+  lv_obj_align(img2, LV_ALIGN_TOP_MID, 0, 90);
+
+  // create a button on the top left, color yellow , text: Left
+  btn = lv_btn_create(lv_scr_act());
+  lv_obj_set_size(btn, 60, 30);
+  lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_YELLOW), 0);
+  label = lv_label_create(btn);
+  lv_label_set_text(label, "Left");
+  lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 10, 10);
+  // create a button on the top right, color green , text: Right
+  btn2 = lv_btn_create(lv_scr_act());
+  lv_obj_set_size(btn2, 60, 30);
+  lv_obj_set_style_bg_color(btn2, lv_palette_main(LV_PALETTE_GREEN), 0);
+  label2 = lv_label_create(btn2);
+  lv_label_set_text(label2, "Right");
+  lv_obj_align(btn2, LV_ALIGN_TOP_RIGHT, -10, 10);
+  // create a button on the bottom left, color blue , text: middle
+  btn3 = lv_btn_create(lv_scr_act());
+  lv_obj_set_size(btn3, 60, 30);
+  lv_obj_set_style_bg_color(btn3, lv_palette_main(LV_PALETTE_BLUE), 0);
+  label3 = lv_label_create(btn3);
+  lv_label_set_text(label3, "Middle");
+  lv_obj_align(btn3, LV_ALIGN_TOP_LEFT, 10, 50);
+  // create a circle in the middle of the screen
+  circle = lv_obj_create(img2);
+  lv_obj_set_size(circle, 30, 30);
+  lv_obj_set_style_bg_color(circle, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_set_style_radius(circle, LV_RADIUS_CIRCLE, 0);
+  lv_obj_align(circle,LV_ALIGN_TOP_LEFT , 0, 0);
+  // disable scroll of the circle
+  lv_obj_set_scrollbar_mode(circle, LV_SCROLLBAR_MODE_OFF);
+  // create a label in the middle of the circle
+  label4 = lv_label_create(circle);
+  lv_label_set_text(label4, "35");
+  lv_obj_align(label4, LV_ALIGN_CENTER, 0, 0);
+
+  // End of setup
+};
+void temperatureToColor(float normalized, uint8_t &red, uint8_t &green, uint8_t &blue);
+void loop()
+{
+  lv_task_handler();
+  mlxRead();   // Read MLX90640 thermal sensor values and update the image
+  //get position of the circle
+    int x = lv_obj_get_x(circle);
+    int y = lv_obj_get_y(circle);
+    Serial.print("Circle position: x = ");
+    Serial.print(x);
+    Serial.print(", y = ");
+    Serial.println(y);
+    // get the temperature value from the MLX90640 sensor
+    float temperature = mlx90640Frame[(y / 30) * 32 + (x / 30)];
+    // update the label with the temperature value
+    lv_label_set_text_fmt(label4, "%d", temperature);
+
+}
+
+void mlxRead()
+{
+  static unsigned long lastRead = 0;
+  if (millis() - lastRead > 1000)
+  {
+    lastRead = millis();
+    if (mlx.getFrame(mlx90640Frame) == 0)
+    {
+      Serial.println("MLX90640 Read Ok");
+      for (int y = 0; y < 24; y++)
+      {
+        for (int x = 0; x < 32; x++)
+        {
+          int index = (23 - y) * 32 + x; // Mirror vertically
+          float temperature = mlx90640Frame[index];
+          float normalized = (temperature - 30.0) / (40.0 - 30.0);
+
+          uint8_t red = 0, green = 0, blue = 0;
+
+          temperatureToColor(normalized, red, green, blue);
+
+          // Combine the colors into RGB565 format
+          uint16_t color = (red >> 3 << 11) | (green >> 2 << 5) | (blue >> 3);
+
+          // Store the color in the mlxCamMap buffer
+          mlxCamMap[(y * 32 + x) * 2] = color >> 8;
+          mlxCamMap[(y * 32 + x) * 2 + 1] = color & 0xFF;
         }
+      }
+      lv_img_set_src(img2, &mlxImage);
     }
+    else
+    {
+      Serial.println("Failed to read MLX90640 frame!");
+    }
+  }
 }
+// Function to convert normalized temperature to RGB values using a rainbow color scale
+void temperatureToColor(float normalized, uint8_t &red, uint8_t &green, uint8_t &blue)
+{
+  normalized = constrain(normalized, 0.0, 1.0);
+  uint8_t region = (int)(normalized * 5);
+  float f = normalized * 5 - region;
+  uint8_t p = 0;
+  uint8_t q = (1 - f) * 255;
+  uint8_t t = f * 255;
 
-// Display color scale on the right side
-void drawTemperatureScale() {
-    int scaleHeight = TFT_VER_RES; // Fit within the vertical resolution
-    int scaleWidth = 20;               // Width of the scale
-    int scaleX = TFT_HOR_RES - scaleWidth; // Start after heatmap and gap
-    int scaleY = 0;
-
-    // Draw a background rectangle for better visibility
-    tft.fillRect(scaleX - 10, scaleY, scaleWidth + 10, scaleHeight, TFT_BLACK);
-
-    for (int i = 0; i < scaleHeight; i++) {
-        float temp = MINTEMP + (MAXTEMP - MINTEMP) * ((float)i / scaleHeight);
-        uint16_t color = mapToInfernoColor(temp, MINTEMP, MAXTEMP);
-        tft.drawFastHLine(scaleX, scaleY + i, scaleWidth, color);
-    }
-
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(1);
-
-    // Display temperature labels with spacing for clarity
-    tft.setCursor(scaleX + scaleWidth + 5, scaleY + 5);
-    tft.printf("%.1fC", MAXTEMP);
-    tft.setCursor(scaleX + scaleWidth + 5, scaleY + scaleHeight - 10);
-    tft.printf("%.1fC", MINTEMP);
-}
-
-// Initialize MLX90640 sensor 
-bool initializeSensor() {
-    if (!mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire)) {
-        Serial.println("MLX90640 not found!");
-        tft.setTextColor(TFT_RED, TFT_BLACK);
-        tft.setCursor(10, TFT_VER_RES / 2);
-        tft.println("MLX90640 not found!");
-        return false;
-    }
-    mlx.setMode(MLX90640_CHESS);
-    mlx.setResolution(MLX90640_ADC_18BIT);
-    mlx.setRefreshRate(MLX90640_4_HZ);
-    return true;
-}
-
-void setup() {
-
-    // Initialize I2C communication for MLX90640
-    Wire.begin(21, 22);
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH); // Set the backlight on
-    Wire.setClock(400000); // Set I2C frequency to 400kHz
-
-    Serial.begin(115200);
-    Serial.println("Starting...");
-
-    // Initialize TFT display
-    tft.begin();
-    tft.setRotation(3);
-    tft.fillScreen(TFT_BLACK);
-
-    // Draw the temperature scale
-    drawTemperatureScale();
-
-    // Initialize MLX90640 sensor
-    if (!initializeSensor()) {
-        while (1) delay(10); // Stop here if initialization fails
-    }
-
-    // Configure pin 23 as an output and activate it
-    pinMode(13, OUTPUT);
-    digitalWrite(13,LOW); // Activate pin 23
-
-    Serial.println("Setup complete");
-}
-
-void loop() {
-    if (mlx.getFrame(frame) == 0) {
-        // Render the heatmap
-        renderHeatmap(frame);
-
-        // Calculate and print FPS (optional for debugging)
-        static uint32_t lastTime = millis();
-        static int frameCount = 0;
-        frameCount++;
-        if (millis() - lastTime > 1000) {
-            Serial.printf("FPS: %d\n", frameCount);
-            frameCount = 0;
-            lastTime = millis();
-        }
-    } else {
-        Serial.println("Failed to read frame, retrying...");
-    }
-
-    delay(250); // Delay to match sensor's refresh rate
+  switch (region)
+  {
+  case 0:
+    red = 255;
+    green = t;
+    blue = p;
+    break;
+  case 1:
+    red = q;
+    green = 255;
+    blue = p;
+    break;
+  case 2:
+    red = p;
+    green = 255;
+    blue = t;
+    break;
+  case 3:
+    red = p;
+    green = q;
+    blue = 255;
+    break;
+  case 4:
+    red = t;
+    green = p;
+    blue = 255;
+    break;
+  default:
+    red = 255;
+    green = p;
+    blue = q;
+    break;
+  }
 }
